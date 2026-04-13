@@ -38,6 +38,10 @@ export default function LoginPage() {
         <a href="/register" style={{ color: "#111" }}>
           Daftar
         </a>
+        {" · "}
+        <a href="/forgot-password" style={{ color: "#111" }}>
+          Lupa password?
+        </a>
       </p>
       {error && (
         <p

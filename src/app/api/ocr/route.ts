@@ -80,22 +80,57 @@ Aturan:
     }
 
     const data = await response.json();
-    const raw = data.choices?.[0]?.message?.content ?? "";
-    const cleaned = raw.replace(/```json|```/g, "").trim();
-    const parsed: OcrResult = JSON.parse(cleaned);
+    const raw: string = data.choices?.[0]?.message?.content ?? "";
 
-    if (!parsed.items || !Array.isArray(parsed.items))
+    // Ekstrak JSON: coba blok ```json ... ``` dulu, lalu fallback ke substring { ... }
+    let jsonStr = raw.trim();
+    const codeBlock = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (codeBlock) {
+      jsonStr = codeBlock[1].trim();
+    } else {
+      const start = jsonStr.indexOf("{");
+      const end = jsonStr.lastIndexOf("}");
+      if (start !== -1 && end !== -1) jsonStr = jsonStr.slice(start, end + 1);
+    }
+
+    let parsed: OcrResult;
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch {
+      return NextResponse.json({ error: "Format response AI tidak valid — coba foto ulang" }, { status: 502 });
+    }
+
+    // Validasi schema manual
+    if (typeof parsed !== "object" || parsed === null)
       return NextResponse.json({ error: "Format response tidak valid" }, { status: 502 });
 
+    if (!Array.isArray(parsed.items))
+      return NextResponse.json({ error: "Format response tidak valid: items harus array" }, { status: 502 });
+
+    const validItems: OcrItem[] = [];
+    for (const item of parsed.items) {
+      const name = typeof item.name === "string" ? item.name.trim() : null;
+      const price = Number(item.price);
+      const qty = Number(item.qty) >= 1 ? Math.round(Number(item.qty)) : 1;
+      if (!name || !isFinite(price) || price < 0) continue; // lewati item tidak valid
+      validItems.push({ name, qty, price });
+    }
+
+    const total = parsed.total !== null && parsed.total !== undefined && isFinite(Number(parsed.total))
+      ? Math.abs(Number(parsed.total))
+      : null;
+
+    // Validasi format tanggal dari AI
+    let date: string | null = null;
+    if (typeof parsed.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date)) {
+      date = parsed.date;
+    }
+
     return NextResponse.json({
-      merchant: parsed.merchant ?? null,
-      date: parsed.date ?? null,
-      total: parsed.total ? Number(parsed.total) : null,
-      items: parsed.items.map((item) => ({
-        name: String(item.name),
-        qty: Number(item.qty) || 1,
-        price: Number(item.price) || 0,
-      })),
+      merchant: typeof parsed.merchant === "string" ? parsed.merchant.trim() || null : null,
+      date,
+      total,
+      items: validItems,
     });
   } catch (err) {
     console.error("OCR parse error:", err);

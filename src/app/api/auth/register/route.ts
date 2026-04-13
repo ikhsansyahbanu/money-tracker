@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { users, categories } from "../../../../../drizzle/schema";
 import { eq } from "drizzle-orm";
+import { isRateLimited, getIp } from "@/lib/rateLimit";
 
 const defaultCategories = [
   { name: "Gaji", type: "income", icon: "💼", color: "#1D9E75" },
@@ -17,6 +18,14 @@ const defaultCategories = [
 ];
 
 export async function POST(req: NextRequest) {
+  // Rate limiting: maks 5 registrasi per IP per 10 menit
+  const ip = getIp(req);
+  if (isRateLimited(`register:${ip}`, 5, 10 * 60_000))
+    return NextResponse.json(
+      { error: "Terlalu banyak percobaan. Coba lagi beberapa menit." },
+      { status: 429 }
+    );
+
   const { name, email, password } = await req.json();
 
   if (!name || !email || !password)
