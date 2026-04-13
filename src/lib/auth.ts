@@ -49,3 +49,12 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     signIn: "/login",
   },
 });
+
+/**
+ * Ambil userId dari session, throw jika tidak ada.
+ * Pakai ini di setiap API route supaya TypeScript tidak complain soal string | undefined.
+ */
+export function requireUserId(session: { user: { id: string } } | null): string {
+  if (!session?.user?.id) throw new Error("Unauthorized");
+  return session.user.id;
+}

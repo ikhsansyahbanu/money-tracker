@@ -1,34 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { auth, requireUserId } from "@/lib/auth";
 import { db } from "@/lib/db";
-import {
-  transactions,
-  transactionItems,
-  accounts,
-} from "../../../../drizzle/schema";
+import { transactions, transactionItems, accounts } from "../../../../drizzle/schema";
 import { eq, and, gte, lte, desc, sql } from "drizzle-orm";
 
 export async function GET(req: NextRequest) {
   const session = await auth();
-  if (!session)
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const userId = requireUserId(session);
 
   const { searchParams } = new URL(req.url);
-  const month = searchParams.get("month"); // format: 2026-04
+  const month = searchParams.get("month");
   const accountId = searchParams.get("accountId");
   const categoryId = searchParams.get("categoryId");
-  const type = searchParams.get("type"); // income | expense
+  const type = searchParams.get("type");
 
-  const conditions = [eq(transactions.userId, session.user.id)];
+  const conditions = [eq(transactions.userId, userId)];
 
   if (month) {
     const [year, m] = month.split("-");
-    const from = `${year}-${m}-01`;
-    const to = `${year}-${m}-31`;
-    conditions.push(gte(transactions.date, from));
-    conditions.push(lte(transactions.date, to));
+    conditions.push(gte(transactions.date, `${year}-${m}-01`));
+    conditions.push(lte(transactions.date, `${year}-${m}-31`));
   }
-
   if (accountId) conditions.push(eq(transactions.accountId, accountId));
   if (categoryId) conditions.push(eq(transactions.categoryId, categoryId));
   if (type) conditions.push(eq(transactions.type, type));
@@ -44,41 +37,20 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const session = await auth();
-  if (!session)
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const userId = requireUserId(session);
 
-  const {
-    accountId,
-    categoryId,
-    type,
-    amount,
-    merchant,
-    note,
-    date,
-    items,
-  } = await req.json();
+  const { accountId, categoryId, type, amount, merchant, note, date, items } = await req.json();
 
   if (!accountId || !type || !amount || !date)
-    return NextResponse.json(
-      { error: "Field wajib tidak lengkap" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "Field wajib tidak lengkap" }, { status: 400 });
 
   if (!["income", "expense"].includes(type))
     return NextResponse.json({ error: "Type tidak valid" }, { status: 400 });
 
   const [tx] = await db
     .insert(transactions)
-    .values({
-      userId: session.user.id,
-      accountId,
-      categoryId,
-      type,
-      amount: String(amount),
-      merchant,
-      note,
-      date,
-    })
+    .values({ userId, accountId, categoryId, type, amount: String(amount), merchant, note, date })
     .returning();
 
   if (items && items.length > 0) {

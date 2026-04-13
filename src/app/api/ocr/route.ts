@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { auth, requireUserId } from "@/lib/auth";
 
 interface OcrItem {
   name: string;
@@ -16,8 +16,8 @@ interface OcrResult {
 
 export async function POST(req: NextRequest) {
   const session = await auth();
-  if (!session)
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  requireUserId(session);
 
   const formData = await req.formData();
   const file = formData.get("file") as File | null;
@@ -26,75 +26,56 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "File tidak ditemukan" }, { status: 400 });
 
   if (!["image/jpeg", "image/png", "image/webp"].includes(file.type))
-    return NextResponse.json(
-      { error: "Format file tidak didukung" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "Format file tidak didukung" }, { status: 400 });
 
   if (file.size > 10 * 1024 * 1024)
-    return NextResponse.json(
-      { error: "Ukuran file maksimal 10 MB" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "Ukuran file maksimal 10 MB" }, { status: 400 });
 
-  // Convert ke base64 di memory — tidak ditulis ke disk
   const buffer = await file.arrayBuffer();
   const base64 = Buffer.from(buffer).toString("base64");
 
   try {
-    const response = await fetch(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": process.env.NEXTAUTH_URL ?? "http://localhost:3000",
-        },
-        body: JSON.stringify({
-          model: "google/gemini-2.5-flash",
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "image_url",
-                  image_url: {
-                    url: `data:${file.type};base64,${base64}`,
-                  },
-                },
-                {
-                  type: "text",
-                  text: `Kamu adalah pembaca struk belanja. Baca struk ini dan kembalikan HANYA JSON tanpa markdown, tanpa penjelasan apapun.
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": process.env.NEXTAUTH_URL ?? "http://localhost:3000",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "image_url", image_url: { url: `data:${file.type};base64,${base64}` } },
+              {
+                type: "text",
+                text: `Kamu adalah pembaca struk belanja. Baca struk ini dan kembalikan HANYA JSON tanpa markdown, tanpa penjelasan apapun.
 
 Format JSON:
 {
   "merchant": "nama toko atau null",
   "date": "YYYY-MM-DD atau null",
-  "items": [
-    { "name": "nama barang", "qty": 1, "price": 5000 }
-  ],
+  "items": [{ "name": "nama barang", "qty": 1, "price": 5000 }],
   "total": 50000
 }
 
 Aturan:
 - price di items adalah harga SATUAN bukan total per baris
 - qty minimal 1
-- Jika tanggal tidak terbaca, isi null
-- Jika nama toko tidak terbaca, isi null
-- Angka tanpa titik atau koma pemisah ribuan
-- Hanya kembalikan JSON, tidak ada teks lain`,
-                },
-              ],
-            },
-          ],
-        }),
-      }
-    );
+- Jika tidak terbaca, isi null
+- Angka tanpa pemisah ribuan
+- Hanya kembalikan JSON`,
+              },
+            ],
+          },
+        ],
+      }),
+    });
 
     if (!response.ok) {
-      const err = await response.json();
-      console.error("OpenRouter error:", err);
+      console.error("OpenRouter error:", await response.json());
       return NextResponse.json({ error: "Gagal memproses struk" }, { status: 502 });
     }
 
@@ -104,12 +85,9 @@ Aturan:
     const parsed: OcrResult = JSON.parse(cleaned);
 
     if (!parsed.items || !Array.isArray(parsed.items))
-      return NextResponse.json(
-        { error: "Format response tidak valid" },
-        { status: 502 }
-      );
+      return NextResponse.json({ error: "Format response tidak valid" }, { status: 502 });
 
-    const result: OcrResult = {
+    return NextResponse.json({
       merchant: parsed.merchant ?? null,
       date: parsed.date ?? null,
       total: parsed.total ? Number(parsed.total) : null,
@@ -118,16 +96,11 @@ Aturan:
         qty: Number(item.qty) || 1,
         price: Number(item.price) || 0,
       })),
-    };
-
-    return NextResponse.json(result);
+    });
   } catch (err) {
     console.error("OCR parse error:", err);
     return NextResponse.json(
-      {
-        error:
-          "Gagal membaca struk — coba foto ulang dengan pencahayaan lebih baik",
-      },
+      { error: "Gagal membaca struk — coba foto ulang dengan pencahayaan lebih baik" },
       { status: 422 }
     );
   }

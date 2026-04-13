@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { auth, requireUserId } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { transactions } from "../../../../../drizzle/schema";
 import { eq, and, gte, sql } from "drizzle-orm";
 
 export async function GET(req: NextRequest) {
   const session = await auth();
-  if (!session)
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const userId = requireUserId(session);
 
   const { searchParams } = new URL(req.url);
   const months = parseInt(searchParams.get("months") ?? "6");
@@ -23,21 +23,16 @@ export async function GET(req: NextRequest) {
       expense: sql<number>`COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0)`,
     })
     .from(transactions)
-    .where(
-      and(
-        eq(transactions.userId, session.user.id),
-        gte(transactions.date, fromStr)
-      )
-    )
+    .where(and(eq(transactions.userId, userId), gte(transactions.date, fromStr)))
     .groupBy(sql`TO_CHAR(date, 'YYYY-MM')`)
     .orderBy(sql`TO_CHAR(date, 'YYYY-MM') ASC`);
 
-  const result = data.map((row) => ({
-    month: row.month,
-    income: Number(row.income),
-    expense: Number(row.expense),
-    balance: Number(row.income) - Number(row.expense),
-  }));
-
-  return NextResponse.json(result);
+  return NextResponse.json(
+    data.map((row) => ({
+      month: row.month,
+      income: Number(row.income),
+      expense: Number(row.expense),
+      balance: Number(row.income) - Number(row.expense),
+    }))
+  );
 }

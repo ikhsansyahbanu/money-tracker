@@ -1,17 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { auth, requireUserId } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { budgets, categories } from "../../../../drizzle/schema";
 import { eq, and, sql } from "drizzle-orm";
 
 export async function GET(req: NextRequest) {
   const session = await auth();
-  if (!session)
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const userId = requireUserId(session);
 
   const { searchParams } = new URL(req.url);
-  const month =
-    searchParams.get("month") ?? new Date().toISOString().slice(0, 7);
+  const month = searchParams.get("month") ?? new Date().toISOString().slice(0, 7);
   const [year, m] = month.split("-");
 
   const data = await db
@@ -24,10 +23,9 @@ export async function GET(req: NextRequest) {
       budgetAmount: budgets.amount,
       spent: sql<number>`
         COALESCE((
-          SELECT SUM(amount)
-          FROM transactions t
+          SELECT SUM(amount) FROM transactions t
           WHERE t.category_id = ${budgets.categoryId}
-            AND t.user_id = ${session.user.id}
+            AND t.user_id = ${userId}
             AND t.type = 'expense'
             AND t.date >= ${`${year}-${m}-01`}
             AND t.date <= ${`${year}-${m}-31`}
@@ -38,46 +36,39 @@ export async function GET(req: NextRequest) {
     .innerJoin(categories, eq(budgets.categoryId, categories.id))
     .where(
       and(
-        eq(budgets.userId, session.user.id),
+        eq(budgets.userId, userId),
         eq(budgets.month, parseInt(m)),
         eq(budgets.year, parseInt(year))
       )
     );
 
-  const result = data.map((row) => ({
-    ...row,
-    budgetAmount: Number(row.budgetAmount),
-    spent: Number(row.spent),
-    percentage: Math.min(
-      Math.round((Number(row.spent) / Number(row.budgetAmount)) * 100),
-      100
-    ),
-    isOverBudget: Number(row.spent) > Number(row.budgetAmount),
-  }));
-
-  return NextResponse.json(result);
+  return NextResponse.json(
+    data.map((row) => ({
+      ...row,
+      budgetAmount: Number(row.budgetAmount),
+      spent: Number(row.spent),
+      percentage: Math.min(Math.round((Number(row.spent) / Number(row.budgetAmount)) * 100), 100),
+      isOverBudget: Number(row.spent) > Number(row.budgetAmount),
+    }))
+  );
 }
 
 export async function POST(req: NextRequest) {
   const session = await auth();
-  if (!session)
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const userId = requireUserId(session);
 
   const { categoryId, amount, month, year } = await req.json();
 
   if (!categoryId || !amount || !month || !year)
-    return NextResponse.json(
-      { error: "Field wajib tidak lengkap" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "Field wajib tidak lengkap" }, { status: 400 });
 
-  // Upsert — kalau sudah ada budget bulan itu untuk kategori yang sama, update
   const existing = await db
     .select()
     .from(budgets)
     .where(
       and(
-        eq(budgets.userId, session.user.id),
+        eq(budgets.userId, userId),
         eq(budgets.categoryId, categoryId),
         eq(budgets.month, month),
         eq(budgets.year, year)
@@ -96,13 +87,7 @@ export async function POST(req: NextRequest) {
 
   const [budget] = await db
     .insert(budgets)
-    .values({
-      userId: session.user.id,
-      categoryId,
-      amount: String(amount),
-      month,
-      year,
-    })
+    .values({ userId, categoryId, amount: String(amount), month, year })
     .returning();
 
   return NextResponse.json(budget, { status: 201 });

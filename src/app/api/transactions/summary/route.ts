@@ -1,21 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { auth, requireUserId } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { transactions } from "../../../../../drizzle/schema";
 import { eq, and, gte, lte, sql } from "drizzle-orm";
 
 export async function GET(req: NextRequest) {
   const session = await auth();
-  if (!session)
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const userId = requireUserId(session);
 
   const { searchParams } = new URL(req.url);
-  const month =
-    searchParams.get("month") ?? new Date().toISOString().slice(0, 7);
-
+  const month = searchParams.get("month") ?? new Date().toISOString().slice(0, 7);
   const [year, m] = month.split("-");
-  const from = `${year}-${m}-01`;
-  const to = `${year}-${m}-31`;
 
   const [result] = await db
     .select({
@@ -25,9 +21,9 @@ export async function GET(req: NextRequest) {
     .from(transactions)
     .where(
       and(
-        eq(transactions.userId, session.user.id),
-        gte(transactions.date, from),
-        lte(transactions.date, to)
+        eq(transactions.userId, userId),
+        gte(transactions.date, `${year}-${m}-01`),
+        lte(transactions.date, `${year}-${m}-31`)
       )
     );
 
